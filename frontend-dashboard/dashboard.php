@@ -124,6 +124,194 @@ if (strpos($current_user->display_name, ' ') !== false) {
             -webkit-font-smoothing: antialiased;
             -moz-osx-font-smoothing: grayscale;
         }
+        /* Files Section Styling */
+.oim-files-section {
+  margin-bottom: 20px;
+}
+
+.oim-files-section:last-child {
+  margin-bottom: 0;
+}
+
+.oim-files-subtitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  margin: 0 0 12px 0;
+  padding: 8px 12px;
+  background: #f3f4f6;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oim-files-subtitle i {
+  font-size: 16px;
+}
+
+.oim-docs-section .oim-files-subtitle {
+  background: linear-gradient(135deg, #ecfdf5, #d1fae5);
+  color: #065f46;
+  border-left: 3px solid #10b981;
+}
+
+.oim-attachments-section .oim-files-subtitle {
+  background: linear-gradient(135deg, #fef3c7, #fde68a);
+  color: #92400e;
+  border-left: 3px solid #f59e0b;
+}
+
+/* File Item */
+.oim-file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  transition: all 0.2s ease;
+}
+
+.oim-file-item:hover {
+  background: #fff;
+  border-color: #6366f1;
+  transform: translateX(4px);
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.1);
+}
+
+.oim-doc-item {
+  border-left: 3px solid #10b981;
+}
+
+.oim-attachment-item {
+  border-left: 3px solid #f59e0b;
+}
+
+/* File Icon */
+.oim-file-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* File Info */
+.oim-file-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.oim-file-link {
+  color: #1f2937;
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.oim-file-link:hover {
+  color: #6366f1;
+  text-decoration: underline;
+}
+
+.oim-file-meta {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* File Actions */
+.oim-file-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.oim-file-view,
+.oim-file-download,
+.oim-file-delete {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 14px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.oim-file-view {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.oim-file-view:hover {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.oim-file-download {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.oim-file-download:hover {
+  background: #10b981;
+  color: #fff;
+}
+
+.oim-file-delete {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.oim-file-delete:hover {
+  background: #ef4444;
+  color: #fff;
+}
+
+/* Empty State */
+.oim-files-empty {
+  text-align: center;
+  padding: 30px;
+  color: #9ca3af;
+}
+
+.oim-files-empty i {
+  font-size: 36px;
+  margin-bottom: 8px;
+  display: block;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .oim-file-item {
+    flex-wrap: wrap;
+  }
+  
+  .oim-file-actions {
+    width: 100%;
+    justify-content: flex-end;
+    padding-top: 8px;
+    border-top: 1px solid #e5e7eb;
+  }
+}
+
         
         /* ========================================
            SIDEBAR STYLES

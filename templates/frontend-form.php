@@ -140,7 +140,7 @@ if (! defined('ABSPATH')) exit;
     margin: 15px 0;
 }
 </style>
-<div id="oim-error-message" style="display:none;" class="oim-error">
+<div id="oim-error-messagewe" style="display:none;" class="oim-error">
     <h3>Submission Failed</h3>
     <div id="oim-error-content"></div>
 </div>
@@ -156,10 +156,10 @@ if (! defined('ABSPATH')) exit;
 
     <div class="oim-grid">
         <label>Customer Reference
-            <input type="text" name="customer_reference" required>
+            <input type="text" name="customer_reference">
         </label>
         <label>Customer - VAT ID
-            <input type="text" name="vat_id" required>
+            <input type="text" name="vat_id">
         </label>
         <label>Customer Email
             <input type="email" name="customer_email" required>

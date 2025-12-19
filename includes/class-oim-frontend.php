@@ -10,7 +10,7 @@ class OIM_Frontend {
 
         // AJAX handlers
         add_action('wp_ajax_oim_handle_upload', [__CLASS__, 'handle_ajax_upload']);
-        add_action('wp_ajax_nopriv_oim_handle_upload', [__CLASS__, 'handle_ajax_upload']);
+
 
         // Fallback non-AJAX (regular POST)
         add_action('admin_post_nopriv_oim_frontend_submit', [__CLASS__, 'handle_submission_fallback']);
@@ -113,7 +113,8 @@ public static function handle_ajax_upload() {
     }
 
     // Driver link
-    $driver_link = home_url('/oim-dashboard/driver-upload/' . $token . '/');
+    //$dsriver_link = home_url('/oim-dashboard/driver-upload/' . $token . '/');
+    $driver_link = home_url('/oim/track/' . $token . '/');
 
     // Build invoice HTML & PDF
     try {
@@ -126,9 +127,10 @@ public static function handle_ajax_upload() {
 
     // ✅ Insert invoice with the invoice_number from data (already set above)
     $invoice_row = [
-        'order_id' => $order_id,
+        'order_id' => $data['internal_order_id'],
         'invoice_number' => $invoice_number, // ✅ Use the invoice_number from insert_order
         'data' => maybe_serialize($data),
+        'attachments' => !empty($data['attachments']) ? wp_json_encode($data['attachments']) : '',
         'pdf_url' => $pdf_result['url'] ?? '',
         'approved' => 0,
         'created_at' => current_time('mysql')
@@ -302,7 +304,8 @@ public static function handle_submission_fallback() {
         }
         $order_id = $res['id'];
         $token = $res['token'];
-        $driver_link = home_url('/oim-dashboard/driver-upload/' . $token . '/');
+        //$driver_link = home_url('/oim-dashboard/driver-upload/' . $token . '/');
+        $driver_link = home_url('/oim/track/' . $token . '/');
     } catch (Exception $e) {
         $redirect = add_query_arg([
             'oim_error' => '1',
@@ -330,6 +333,7 @@ public static function handle_submission_fallback() {
         'order_id' => $order_id,
         'invoice_number' => $invoice_number,
         'data' => maybe_serialize($data), // Includes all calculated values
+        'attachments' => !empty($data['attachments']) ? wp_json_encode($data['attachments']) : '',
         'pdf_url' => $pdf_result['url'] ?? '',
         'approved' => 0,
         'created_at' => current_time('mysql')
@@ -437,282 +441,272 @@ public static function handle_submission_fallback() {
 <html>
 <head>
 <meta charset="utf-8">
-<title>Upload Documents for Order ' . esc_html($order['internal_order_id']) . '</title>';
+<title>Upload Documents for Order ' . esc_html($order['internal_order_id']) . '</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">';
     wp_head();
-    echo '<style>
-:root {
-    --primary-color: #5b67f1;
-    --success-bg: #e6ffe6;
-    --success-border: #b3e6b3;
-    --card-bg: #fff;
-    --border-color: #ddd;
-    --text-color: #333;
-    --radius: 10px;
-}
-body {
-    font-family: "Segoe UI", Roboto, Arial, sans-serif;
-    background: #f7f8fa;
-    color: var(--text-color);
-    margin: 0;
-    padding: 40px 20px;
-}
-.oim-container {
-    max-width: 700px;
-    margin: 0 auto;
-    background: var(--card-bg);
-    padding: 30px 40px;
-    border-radius: var(--radius);
-    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-}
-.oim-header {
-    text-align: center;
-    margin-bottom: 25px;
-}
-.oim-header h2 {
-    margin: 0;
-    color: var(--primary-color);
-    font-weight: 600;
-}
-.oim-success {
-    background: var(--success-bg);
-    border: 1px solid var(--success-border);
-    padding: 10px 14px;
-    border-radius: var(--radius);
-    margin-bottom: 20px;
-    text-align: center;
-    font-size: 15px;
-}
-form {
-    margin-top: 15px;
-    text-align: center;
-}
-input[type="file"] {
-    display: block;
-    margin: 15px auto;
-    padding: 8px;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    width: 100%;
-    max-width: 400px;
-    background: #fafafa;
-}
-button[type="submit"], #add-file-btn {
-    background: var(--primary-color);
-    color: #fff;
-    border: none;
-    padding: 10px 24px;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 15px;
-    transition: background 0.2s ease-in-out;
-}
-button[type="submit"]:hover, #add-file-btn:hover {
-    background: #4c56d1;
-}
-#add-file-btn {
-    display: inline-block;
-    margin-bottom: 15px;
-}
-#file-preview {
-    list-style: none;
-    padding: 0;
-    margin-top: 10px;
-}
-#file-preview li {
-    background: #fafafa;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    padding: 8px 10px;
-    margin-bottom: 5px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-#file-preview button {
-    background: #ff4c4c;
-    border: none;
-    color: #fff;
-    padding: 2px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-}
-#file-preview button:hover {
-    background: #d12c2c;
-}
-.oim-doc-list {
-    list-style: none;
-    padding: 0;
-    margin: 25px 0 0;
-}
-.oim-doc-list li {
-    background: #fafafa;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    padding: 10px 15px;
-    margin-bottom: 8px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-.oim-doc-list a {
-    color: var(--primary-color);
-    text-decoration: none;
-    font-weight: 500;
-}
-.oim-doc-list a:hover {
-    text-decoration: underline;
-}
-.oim-header h2 {
-    font-size: 22px;
-    color: #333;
-    margin-bottom: 18px;
-    text-align: center;
-}
-.oim-header .order-id {
-    color: #4f46e5;
-    font-weight: 600;
-}
-.order-info {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px 24px;
-    margin-top: 10px;
-}
-.order-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
-    padding: 10px 14px;
-    transition: all 0.3s ease;
-}
-.order-item:hover {
-    background: #f1f5ff;
-    border-color: #4f46e5;
-}
-.order-item .label {
-    font-weight: 600;
-    color: #555;
-}
-.order-item .value {
-    color: #222;
-}
-@media (max-width: 600px) {
-    .order-info {
-        grid-template-columns: 1fr;
-    }
-}
-footer {
-    text-align: center;
-    margin-top: 30px;
-    color: #888;
-    font-size: 13px;
-}
-</style>
+    echo '
 </head>
 <body>
 <div class="oim-container">
-<div class="oim-headerss">
-    <h2>Upload Documents for Order ' . esc_html($order['internal_order_id']) . '</h2>
-    <div class="order-item">
-        <span class="label">Loading Date:</span>
-        <span class="value">' . esc_html($data['loading_date']) . '</span>
-    </div>
-    <div class="order-item">
-        <span class="label">Unloading Date:</span>
-        <span class="value">' . esc_html($data['unloading_date']) . '</span>
-    </div>
-    <div class="order-item">
-        <span class="label">Loading City:</span>
-        <span class="value">' . esc_html($data['loading_city']) . '</span>
-    </div>
-    <div class="order-item">
-        <span class="label">Unloading City:</span>
-        <span class="value">' . esc_html($data['unloading_city']) . '</span>
-    </div>
-</div>';
+';
+echo '<div class="oim-header">
+    <h2><i class="fas fa-file-invoice"></i>Upload Documents for Order ' . esc_html($order['internal_order_id']) . '</h2>
+   
+</div>
+ <div class="order-info">
+        <div class="order-item">
+            <span class="label">Loading Date</span>
+            <span class="value">' . esc_html($data['loading_date']) . '</span>
+        </div>
+        <div class="order-item">
+            <span class="label">Unloading Date</span>
+            <span class="value">' . esc_html($data['unloading_date']) . '</span>
+        </div>
+        <div class="order-item">
+            <span class="label">Loading City</span>
+            <span class="value">' . esc_html($data['loading_city']) . '</span>
+        </div>
+        <div class="order-item">
+            <span class="label">Unloading City</span>
+            <span class="value">' . esc_html($data['unloading_city']) . '</span>
+        </div>
+    </div>';
 
 if (isset($_GET['uploaded'])) {
-    echo '<div class="oim-success">File(s) uploaded successfully.</div>';
+    echo '<div class="oim-successd"><i class="fas fa-check-circle"></i> File(s) uploaded successfully!</div>';
 }
 
-echo '<form method="post" enctype="multipart/form-data" id="driver-upload-form">';
+
+
+echo '<div class="upload-section">
+<h3><i class="fas fa-cloud-upload-alt"></i>Upload New Documents</h3>
+
+<form method="post" enctype="multipart/form-data" id="driver-upload-form">';
 wp_nonce_field('oim_driver_upload_' . $token);
 echo '
+<div class="upload-area" id="upload-area">
+    <div class="upload-icon">
+        <i class="fas fa-cloud-upload-alt"></i>
+    </div>
+    <div class="upload-text">
+        <h4>Click to upload or drag and drop</h4>
+        <p>PDF, DOC, DOCX, XLS, XLSX, JPG, PNG, ZIP (Max 10MB per file)</p>
+    </div>
+    <button type="button" id="add-file-btn">
+        <i class="fas fa-plus-circle"></i> Select Files
+    </button>
+</div>
+
 <div id="file-inputs">
   <div class="file-group">
-    <input type="file" name="driver_docs[]" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.xls,.xlsx,.csv,.zip,.rar,.txt,.rtf" required>
+    <input type="file" name="driver_docs[]" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.xls,.xlsx,.csv,.zip,.rar,.txt,.rtf" multiple>
   </div>
 </div>
-<button type="button" id="add-file-btn">+ Add another file</button>
+
 <ul id="file-preview"></ul>
-<button type="submit" style="margin-top:15px;">Upload</button>
+
+<div class="submit-container" style="display: none;" id="submit-container">
+    <button type="submit" id="submit-btn"><i class="fas fa-upload"></i> Upload All Files</button>
+</div>
 </form>
+</div>
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
   const fileInputs = document.getElementById("file-inputs");
   const addBtn = document.getElementById("add-file-btn");
   const preview = document.getElementById("file-preview");
+  const uploadArea = document.getElementById("upload-area");
+  const submitContainer = document.getElementById("submit-container");
+  const submitBtn = document.getElementById("submit-btn");
+  const mainFileInput = fileInputs.querySelector("input[type=file]");
+  
+  let selectedFiles = [];
+
+  function formatFileSize(bytes) {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
+  }
+
+  function getFileIcon(filename) {
+    const ext = filename.split(".").pop().toLowerCase();
+    const iconMap = {
+      "jpg": "fa-file-image", "jpeg": "fa-file-image", "png": "fa-file-image", 
+      "gif": "fa-file-image", "webp": "fa-file-image",
+      "pdf": "fa-file-pdf",
+      "doc": "fa-file-word", "docx": "fa-file-word",
+      "xls": "fa-file-excel", "xlsx": "fa-file-excel", "csv": "fa-file-excel",
+      "zip": "fa-file-archive", "rar": "fa-file-archive", "7z": "fa-file-archive",
+      "txt": "fa-file-alt", "rtf": "fa-file-alt"
+    };
+    return iconMap[ext] || "fa-file";
+  }
 
   function refreshPreview() {
     preview.innerHTML = "";
-    const files = document.querySelectorAll("input[type=file]");
-    files.forEach((input) => {
-      const val = input.files[0] ? input.files[0].name : "";
-      if (val) {
-        const li = document.createElement("li");
-        li.textContent = val + " ";
-        const removeBtn = document.createElement("button");
-        removeBtn.textContent = "Remove";
-        removeBtn.type = "button";
-        removeBtn.onclick = () => {
-          input.parentElement.remove();
-          refreshPreview();
-        };
-        li.appendChild(removeBtn);
-        preview.appendChild(li);
-      }
+    
+    if (selectedFiles.length === 0) {
+      submitContainer.style.display = "none";
+      return;
+    }
+
+    submitContainer.style.display = "flex";
+    
+    selectedFiles.forEach((file, index) => {
+      const li = document.createElement("li");
+      
+      const fileInfo = document.createElement("div");
+      fileInfo.className = "file-info";
+      
+      const fileIcon = document.createElement("div");
+      fileIcon.className = "file-icon";
+      fileIcon.innerHTML = `<i class="fas ${getFileIcon(file.name)}"></i>`;
+      
+      const fileDetails = document.createElement("div");
+      fileDetails.className = "file-details";
+      
+      const fileName = document.createElement("span");
+      fileName.className = "file-name";
+      fileName.textContent = file.name;
+      
+      const fileSize = document.createElement("span");
+      fileSize.className = "file-size";
+      fileSize.textContent = formatFileSize(file.size);
+      
+      fileDetails.appendChild(fileName);
+      fileDetails.appendChild(fileSize);
+      
+      fileInfo.appendChild(fileIcon);
+      fileInfo.appendChild(fileDetails);
+      
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.innerHTML = `<i class="fas fa-trash"></i> Remove`;
+      removeBtn.onclick = () => {
+        selectedFiles.splice(index, 1);
+        refreshPreview();
+      };
+      
+      li.appendChild(fileInfo);
+      li.appendChild(removeBtn);
+      preview.appendChild(li);
     });
   }
 
+  function handleFiles(files) {
+    for (let file of files) {
+      if (!selectedFiles.some(f => f.name === file.name && f.size === file.size)) {
+        selectedFiles.push(file);
+      }
+    }
+    refreshPreview();
+  }
+
   addBtn.addEventListener("click", () => {
-    const div = document.createElement("div");
-    div.classList.add("file-group");
-    const input = document.createElement("input");
-    input.type = "file";
-    input.name = "driver_docs[]";
-    input.accept = ".jpg,.jpeg,.png,.pdf,.doc,.docx,.xls,.xlsx,.csv,.zip,.rar,.txt,.rtf";
-    input.addEventListener("change", refreshPreview);
-    div.appendChild(input);
-    fileInputs.appendChild(div);
+    mainFileInput.click();
   });
 
-  fileInputs.addEventListener("change", refreshPreview);
+  mainFileInput.addEventListener("change", (e) => {
+    if (e.target.files.length > 0) {
+      handleFiles(e.target.files);
+    }
+  });
+
+  // Drag and drop functionality
+  ["dragenter", "dragover", "dragleave", "drop"].forEach(eventName => {
+    uploadArea.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  });
+
+  ["dragenter", "dragover"].forEach(eventName => {
+    uploadArea.addEventListener(eventName, () => {
+      uploadArea.classList.add("drag-over");
+    });
+  });
+
+  ["dragleave", "drop"].forEach(eventName => {
+    uploadArea.addEventListener(eventName, () => {
+      uploadArea.classList.remove("drag-over");
+    });
+  });
+
+  uploadArea.addEventListener("drop", (e) => {
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      handleFiles(files);
+    }
+  });
+
+  // Form submission
+  document.getElementById("driver-upload-form").addEventListener("submit", (e) => {
+    if (selectedFiles.length === 0) {
+      e.preventDefault();
+      alert("Please select at least one file to upload.");
+      return;
+    }
+
+    // Create a new DataTransfer object to hold our files
+    const dataTransfer = new DataTransfer();
+    selectedFiles.forEach(file => {
+      dataTransfer.items.add(file);
+    });
+    
+    // Update the file input with selected files
+    mainFileInput.files = dataTransfer.files;
+    
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = \'<i class="fas fa-spinner fa-spin"></i> Uploading...\';
+  });
 });
 </script>
 ';
 
 $docs = OIM_DB::get_documents($order['internal_order_id']);
 if ($docs) {
-    echo '<h3 style="margin-top:30px;">Uploaded Documents</h3>';
+    echo '<div class="documents-section">';
+    echo '<h3><i class="fas fa-folder-open"></i>Uploaded Documents<span class="doc-count">' . count($docs) . '</span></h3>';
     echo '<ul class="oim-doc-list">';
     foreach ($docs as $d) {
-        echo '<li><span>' . esc_html($d['filename']) . '</span> <a href="' . esc_url($d['file_url']) . '" target="_blank">Download</a></li>';
+        $ext = strtolower(pathinfo($d['filename'], PATHINFO_EXTENSION));
+        $icon = 'fa-file';
+        if (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) $icon = 'fa-file-image';
+        elseif ($ext === 'pdf') $icon = 'fa-file-pdf';
+        elseif (in_array($ext, ['doc', 'docx'])) $icon = 'fa-file-word';
+        elseif (in_array($ext, ['xls', 'xlsx', 'csv'])) $icon = 'fa-file-excel';
+        elseif (in_array($ext, ['zip', 'rar', '7z'])) $icon = 'fa-file-archive';
+        
+        echo '<li>
+            <div class="doc-info">
+                <div class="doc-icon"><i class="fas ' . $icon . '"></i></div>
+                <span class="doc-name">' . esc_html($d['filename']) . '</span>
+            </div>
+            <a href="' . esc_url($d['file_url']) . '" target="_blank"><i class="fas fa-download"></i> Download</a>
+        </li>';
     }
     echo '</ul>';
+    echo '</div>';
 } else {
-    echo '<p style="text-align:center;margin-top:30px;color:#777;">No documents uploaded yet.</p>';
+    echo '<div class="documents-section">';
+    echo '<div class="oim-empty-state">
+        <i class="fas fa-inbox"></i>
+        <p>No documents uploaded yet.</p>
+    </div>';
+    echo '</div>';
 }
 
 wp_footer();
-echo '</div></body></html>';
+echo '</div>
+<footer>
+    © ' . date('Y') . ' Order Management System. All rights reserved.
+</footer>
+</body></html>';
 exit;
-}
-
-
+    }
 
     // Helper to restructure $_FILES array
     private static function restructure_files_array($files) {

@@ -12,7 +12,10 @@ class OIM_Admin {
         add_action('admin_post_oim_delete_order', [__CLASS__, 'handle_delete_order']);
         add_action('admin_post_oim_delete_doc', [__CLASS__, 'handle_delete_doc']);
         add_action('admin_post_oim_delete_attachment', ['OIM_Admin', 'handle_delete_attachment']);
-        
+        add_action('admin_post_oim_delete_attachment', 'oim_handle_delete_attachment');
+add_action('admin_post_nopriv_oim_delete_attachment', 'oim_handle_delete_attachment'); // Add this
+add_action('admin_post_oim_delete_doc', 'handle_delete_doc');
+add_action('admin_post_nopriv_oim_delete_doc', 'handle_delete_doc'); 
     }
 
     public static function admin_menu() {
@@ -20,6 +23,23 @@ class OIM_Admin {
         add_submenu_page('oim_orders', 'OIM Settings', 'Settings', 'manage_options', 'oim_settings', [__CLASS__, 'page_settings']); // ,customer_company_ID_crn, customer_tax_ID
     }
 
+
+function oim_handle_delete_doc() {
+    $doc_id = intval($_GET['doc_id']);
+    $order_id = intval($_GET['order_id']);
+    global $wpdb;
+    $wpdb->delete($wpdb->prefix . 'oim_order_documents', ['id' => $doc_id]);
+    wp_die();
+}
+
+function oim_handle_delete_attachment() {
+    $order_id = intval($_GET['order_id']);
+    if (!wp_verify_nonce($_GET['_wpnonce'], 'oim_delete_attachment_' . $order_id)) {
+        wp_die('Security check failed');
+    }
+    $file = $_GET['file'];
+    wp_die();
+}
 public static function page_settings() {
     if (!current_user_can('manage_options')) wp_die('Unauthorized');
 
@@ -976,7 +996,7 @@ public static function page_settings() {
                                 <?php if (!empty($orders)): ?>
                                     <?php foreach ($orders as $o):
                                         $data = $parse_order_data($o['data']);
-                                        $docs = OIM_DB::get_documents($o['id']);
+                                        $docs = OIM_DB::get_documents($o['internal_order_id']);
                                         $attachments = maybe_unserialize($o['attachments']);
                                         if (is_string($attachments)) {
                                             $decoded = json_decode($attachments, true);
@@ -1095,6 +1115,74 @@ public static function page_settings() {
 
 
         <script>
+            jQuery(document).ready(function($) {
+  $(document).on('click', '.oim-file-delete', function(e) {
+    e.preventDefault();
+    
+   
+    
+    const $btn = $(this);
+    const $listItem = $btn.closest('.oim-document-item');
+    const url = $btn.data('url') || $btn.attr('href'); // Support both button and link
+    
+    $btn.html('<span class="dashicons dashicons-update dashicons-spin"></span>');
+    
+    $.get(url, function() {
+      $listItem.fadeOut(300, function() {
+        $(this).remove();
+        
+        const $list = $listItem.closest('.oim-document-list');
+        if ($list.find('.oim-document-item').length === 0) {
+          const type = $list.closest('.oim-card').find('.oim-card-title').text();
+          $list.replaceWith(`<p class="oim-empty-state">No ${type.toLowerCase()} found.</p>`);
+        }
+      });
+    }).fail(function() {
+      alert('Failed to delete file');
+      $btn.html('<span class="dashicons dashicons-trash"></span>');
+    });
+  });
+});
+
+
+            jQuery(document).ready(function($) {
+  // Handle delete for both documents and attachments
+  $(document).on('click', '.oim-file-delete', function(e) {
+    e.preventDefault();
+    
+   
+    
+    const $btn = $(this);
+    const $fileItem = $btn.closest('.oim-file-item');
+    const url = $btn.attr('href');
+    
+    $btn.html('<i class="fas fa-spinner fa-spin"></i>');
+    
+    $.get(url, function() {
+      $fileItem.fadeOut(300, function() {
+        $(this).remove();
+        
+        // Update count
+        const $section = $fileItem.closest('.oim-files-section');
+        const remaining = $section.find('.oim-file-item').length;
+        $section.find('.oim-files-subtitle').html(
+          $section.find('.oim-files-subtitle').html().replace(/\(\d+\)/, `(${remaining})`)
+        );
+        
+        // Hide section if empty
+        if (remaining === 0) {
+          const $group = $section.closest('.documents-attachments');
+          if ($group.find('.oim-file-item').length === 0) {
+            $group.fadeOut(300);
+          }
+        }
+      });
+    }).fail(function() {
+      alert('Failed to delete file');
+      $btn.html('<i class="fas fa-trash-alt"></i>');
+    });
+  });
+});
 jQuery(document).ready(function($) {
     $('#toggle-import-btn').on('click', function() {
                 $('#import-payments-section').slideToggle(300);
@@ -1200,7 +1288,7 @@ jQuery(document).ready(function($) {
             updateSelectedRow();
         }
     });
-
+    
     function openSidebar(order) {
         const data = order.data || {};
         const createdAt = order.createdAt || '-';
@@ -1281,66 +1369,124 @@ html += `
     </div>
   </div>
 `;
+    const docs = order.documents || [];
 
-// 🧾 Documents + Attachments (merged group)
-let hasDocs = order.documents && order.documents.length > 0;
+    const hasDocs = Array.isArray(docs) && docs.length > 0;
 let hasAttachments = order.attachments && order.attachments.length > 0;
-
 if (hasDocs || hasAttachments) {
   html += `
     <div class="oim-detail-group documents-attachments">
       <h4>Documents & Attachments</h4>
       <div class="oim-files-list">
   `;
-
-  // Documents
+  
+  // Documents Section
   if (hasDocs) {
+    html += `
+      <div class="oim-files-section oim-docs-section">
+        <h5 class="oim-files-subtitle">
+          <i class="fas fa-file-alt"></i> Driver Documents (${order.documents.length})
+        </h5>
+    `;
+    
     order.documents.forEach(function (doc) {
-      const deleteUrl =
-        '<?php echo wp_nonce_url(admin_url("admin-post.php?action=oim_delete_doc"), "oim_delete_doc_"); ?>' +
-        doc.id +
-        '&doc_id=' +
-        doc.id +
-        '&order_id=' +
-        order.id;
+      const ext = doc.filename.split('.').pop().toLowerCase();
+      let icon = 'fa-file';
+      
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+        icon = 'fa-file-image';
+      } else if (ext === 'pdf') {
+        icon = 'fa-file-pdf';
+      } else if (['doc', 'docx'].includes(ext)) {
+        icon = 'fa-file-word';
+      } else if (['xls', 'xlsx', 'csv'].includes(ext)) {
+        icon = 'fa-file-excel';
+      } else if (['zip', 'rar', '7z'].includes(ext)) {
+        icon = 'fa-file-archive';
+      }
+      
+      const deleteUrl = '<?php echo admin_url("admin-post.php?action=oim_delete_doc&_wpnonce=" . wp_create_nonce("oim_delete_doc")); ?>'
+    + '&doc_id=' + doc.id
+    + '&order_id=' + internalId;
 
       html += `
-        <div class="oim-file-item">
-          <span class="dashicons dashicons-media-document"></span>
+        <div class="oim-file-item oim-doc-item">
+          <i class="fas ${icon}"></i>
           <a href="${doc.file_url}" target="_blank" class="oim-file-link">${doc.filename}</a>
-          <a href="${deleteUrl}" class="oim-file-delete" onclick="return confirm('Delete this document?');" title="Delete">×</a>
+          <div class="oim-file-actions">
+            <a href="${doc.file_url}" target="_blank" class="oim-file-view" title="View">
+              <i class="fas fa-eye"></i>
+            </a>
+            <a href="${doc.file_url}" download class="oim-file-download" title="Download">
+              <i class="fas fa-download"></i>
+            </a>
+            <a href="${deleteUrl}" class="oim-file-delete" title="Delete">
+              <i class="fas fa-trash-alt"></i>
+            </a>
+          </div>
         </div>
       `;
     });
+    
+    html += `</div>`;
   }
 
-  // Attachments
+  // Attachments Section
   if (hasAttachments) {
+    html += `
+      <div class="oim-files-section oim-attachments-section">
+        <h5 class="oim-files-subtitle">
+          <i class="fas fa-paperclip"></i> Order Attachments (${order.attachments.length})
+        </h5>
+    `;
+    
     order.attachments.forEach(function (url) {
       const filename = url.split('/').pop();
-      const deleteUrl =
-        '<?php echo wp_nonce_url(admin_url("admin-post.php?action=oim_delete_attachment"), "oim_delete_attachment_"); ?>' +
-        order.id +
-        '&order_id=' +
-        order.id +
-        '&file=' +
-        encodeURIComponent(url);
+      const ext = filename.split('.').pop().toLowerCase();
+      let icon = 'fa-file';
+      
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+        icon = 'fa-file-image';
+      } else if (ext === 'pdf') {
+        icon = 'fa-file-pdf';
+      } else if (['doc', 'docx'].includes(ext)) {
+        icon = 'fa-file-word';
+      } else if (['xls', 'xlsx', 'csv'].includes(ext)) {
+        icon = 'fa-file-excel';
+      } else if (['zip', 'rar', '7z'].includes(ext)) {
+        icon = 'fa-file-archive';
+      }
+      
+      const deleteUrl = '<?php echo admin_url("admin-post.php?action=oim_delete_attachment&_wpnonce=" . wp_create_nonce("oim_delete_attachment")); ?>'
+    + '&order_id=' + order.id
+    + '&file=' + encodeURIComponent(url);
 
       html += `
-        <div class="oim-file-item">
-          <span class="dashicons dashicons-media-default"></span>
+        <div class="oim-file-item oim-attachment-item">
+          <i class="fas ${icon}"></i>
           <a href="${url}" target="_blank" class="oim-file-link">${filename}</a>
-          <a href="${deleteUrl}" class="oim-file-delete" onclick="return confirm('Delete this attachment?');" title="Delete">×</a>
+          <div class="oim-file-actions">
+            <a href="${url}" target="_blank" class="oim-file-view" title="View">
+              <i class="fas fa-eye"></i>
+            </a>
+            <a href="${url}" download class="oim-file-download" title="Download">
+              <i class="fas fa-download"></i>
+            </a>
+            <a href="${deleteUrl}" class="oim-file-delete" title="Delete">
+              <i class="fas fa-trash-alt"></i>
+            </a>
+          </div>
         </div>
       `;
     });
+    
+    html += `</div>`;
   }
 
   html += `
       </div>
     </div>
   `;
-  
 }
 // 🟢 Order Note
 html += `
@@ -2169,7 +2315,10 @@ jQuery(document).ready(function($) {
     
 })();
 </script>
+<style>
 
+
+</style>
     </div>
     <?php
 }
@@ -2223,7 +2372,7 @@ private static function sort_link($column) {
 
         <h2>Documents</h2>
         <?php 
-        $docs = OIM_DB::get_documents($order['id']); 
+        $docs = OIM_DB::get_documents($order['internal_order_id']); 
         if ($docs): ?>
             <ul>
                 <?php foreach ($docs as $d): ?>
@@ -2448,10 +2597,10 @@ private static function sort_link($column) {
                     </div>
 
                     <!-- Documents Section -->
-                    <div class="oim-card">
+                    <!-- <div class="oim-card">
                         <h3 class="oim-card-title">Documents</h3>
                         <?php 
-                        $docs = OIM_DB::get_documents($order['id']); 
+                        $docs = OIM_DB::get_documents($order['internal_order_id']); 
                         if ($docs): ?>
                             <ul class="oim-document-list">
                                 <?php foreach ($docs as $d): ?>
@@ -2459,10 +2608,13 @@ private static function sort_link($column) {
                                         <span class="dashicons dashicons-media-document"></span>
                                         <span class="oim-doc-name"><?php echo esc_html($d['filename']); ?></span>
                                         <div class="oim-doc-actions">
-                                            <a href="<?php echo esc_url($d['file_url']); ?>" target="_blank" class="button button-small">Download</a>
-                                            <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=oim_delete_doc&doc_id=' . $d['id'] . '&order_id=' . $order['id']), 'oim_delete_doc_' . $d['id']); ?>" 
-                                               onclick="return confirm('Delete this document?');" 
-                                               class="button button-small button-link-delete">Delete</a>
+                                            <a href="<?php echo esc_url($d['file_url']); ?>" target="_blank" class="button button-small button-primary download_bt" title="Download">
+    <span class="dashicons dashicons-download"></span>
+</a>
+                                            <button type="button" data-url="<?php echo admin_url('admin-post.php?action=oim_delete_doc&_wpnonce=' . wp_create_nonce('oim_delete_doc') . '&doc_id=' . $d['id'] . '&order_id=' . $order['id']); ?>" 
+   class="button button-small button-link-delete oim-file-delete" title="Delete">
+    <span class="dashicons dashicons-trash"></span>
+</button>
                                         </div>
                                     </li>
                                 <?php endforeach; ?>
@@ -2470,10 +2622,10 @@ private static function sort_link($column) {
                         <?php else: ?>
                             <p class="oim-empty-state">No documents uploaded yet.</p>
                         <?php endif; ?>
-                    </div>
+                    </div> -->
 
                     <!-- Attachments Section -->
-                    <div class="oim-card">
+                    <!-- <div class="oim-card">
                         <h3 class="oim-card-title">Attachments</h3>
                         <?php 
                         $attachments = maybe_unserialize($order['attachments']);
@@ -2489,10 +2641,13 @@ private static function sort_link($column) {
                                         <span class="dashicons dashicons-paperclip"></span>
                                         <span class="oim-doc-name"><?php echo esc_html(basename($url)); ?></span>
                                         <div class="oim-doc-actions">
-                                            <a href="<?php echo esc_url($url); ?>" target="_blank" class="button button-small">Download</a>
-                                            <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=oim_delete_attachment&order_id=' . $order['id'] . '&file=' . urlencode($url)), 'oim_delete_attachment_' . $order['id']); ?>" 
-                                               onclick="return confirm('Delete this attachment?');" 
-                                               class="button button-small button-link-delete">Delete</a>
+                                           <a href="<?php echo esc_url($url); ?>" target="_blank" class="button button-small button-primary download_bt" title="Download">
+    <span class="dashicons dashicons-download"></span>
+</a>
+                                            <button type="button" data-url="<?php echo admin_url('admin-post.php?action=oim_delete_attachment&_wpnonce=' . wp_create_nonce('oim_delete_attachment') . '&order_id=' . $order['id'] . '&file=' . urlencode($url)); ?>" 
+   class="button button-small button-link-delete oim-file-delete" title="Delete">
+    <span class="dashicons dashicons-trash"></span>
+</button>
                                         </div>
                                     </li>
                                 <?php endforeach; ?>
@@ -2500,7 +2655,7 @@ private static function sort_link($column) {
                         <?php else: ?>
                             <p class="oim-empty-state">No attachments found.</p>
                         <?php endif; ?>
-                    </div>
+                    </div> -->
 
                 </div>
 
@@ -2551,6 +2706,62 @@ private static function sort_link($column) {
 
     <style>
     /* Additional styles for document/attachment lists */
+    .dashicons-spin {
+    animation: dashicons-spin 1s infinite linear;
+}
+
+@keyframes dashicons-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+    .oim-doc-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.oim-doc-actions .button {
+    padding: 6px 12px !important;
+    height: auto !important;
+    line-height: 1 !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.oim-doc-actions .dashicons {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+.oim-doc-actions .download_bt {
+    background: #fff !important;
+    color: #fff !important;
+}
+
+.oim-doc-actions .download_bt:hover {
+    background: #fff !important;
+    color: #fff !important;
+}
+
+/* Delete Button - Red */
+.oim-doc-actions .button-link-delete {
+    background: #fff !important;
+    border-color: #d63638 !important;
+    color: #d63638 !important;
+}
+
+.oim-doc-actions .button-link-delete:hover {
+    background: #d63638 !important;
+    border-color: #d63638 !important;
+    color: #fff !important;
+}
+
+.oim-doc-actions .button-link-delete .dashicons {
+    color: inherit;
+}
     .oim-document-list {
         list-style: none;
         margin: 0;
@@ -2602,18 +2813,22 @@ private static function sort_link($column) {
 }
 
 public static function handle_delete_attachment() {
+    header('Content-Type: text/plain');
+    
     if (!current_user_can('manage_options')) {
-        wp_die('Unauthorized');
+        echo 'unauthorized';
+        die();
     }
 
     $order_id = isset($_GET['order_id']) ? intval($_GET['order_id']) : 0;
     $file_url = isset($_GET['file']) ? esc_url_raw($_GET['file']) : '';
 
     if (!$order_id || !$file_url) {
-        wp_die('Invalid request');
+        echo 'missing';
+        die();
     }
 
-    check_admin_referer('oim_delete_attachment_' . $order_id);
+    check_admin_referer('oim_delete_attachment');  // Remove order_id suffix
 
     global $wpdb;
     $table = $wpdb->prefix . 'oim_orders';
@@ -2623,11 +2838,8 @@ public static function handle_delete_attachment() {
     $attachments = array_filter($attachments, function($url) use ($file_url) {
         return urldecode($url) !== urldecode($file_url);
     });
-
     $wpdb->update($table, ['attachments' => json_encode(array_values($attachments))], ['id' => $order_id]);
-
-    wp_safe_redirect(admin_url('admin.php?page=oim_orders&view_order=' . $order_id));
-    exit;
+    die();
 }
 
 
@@ -2669,13 +2881,21 @@ public static function handle_delete_attachment() {
     }
 
     public static function handle_delete_doc() {
-        if (!current_user_can('manage_options')) wp_die('Unauthorized');
-        if (empty($_GET['doc_id']) || empty($_GET['order_id'])) wp_die('Missing');
-        $doc_id = intval($_GET['doc_id']);
-        $order_id = intval($_GET['order_id']);
-        check_admin_referer('oim_delete_doc_' . $doc_id);
-        OIM_DB::delete_document($doc_id);
-        wp_safe_redirect(admin_url('admin.php?page=oim_orders&view_order=' . $order_id));
-        exit;
+    if (!current_user_can('manage_options')) {
+        echo 'unauthorized';
+        die();
     }
+    
+    if (empty($_GET['doc_id']) || empty($_GET['order_id'])) {
+        echo 'missing';
+        die();
+    }
+    
+    $doc_id = intval($_GET['doc_id']);
+    check_admin_referer('oim_delete_doc');
+    
+    OIM_DB::delete_document($doc_id);
+    
+    die();
+}
 }

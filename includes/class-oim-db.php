@@ -43,17 +43,19 @@ class OIM_DB {
 
         // invoices
         $sql = "CREATE TABLE {$invoices_table} (
-            id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
-            order_id BIGINT(20) UNSIGNED NOT NULL,
-            invoice_number VARCHAR(100),
-            data LONGTEXT,
-            pdf_url TEXT,
-            approved TINYINT(1) DEFAULT 0,
-            created_at DATETIME NOT NULL,
-            PRIMARY KEY (id),
-            KEY order_id (order_id)
-        ) {$charset};";
-        dbDelta($sql);
+    id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+    order_id BIGINT(20) UNSIGNED NOT NULL,
+    invoice_number VARCHAR(100),
+    data LONGTEXT,
+    attachments LONGTEXT,  -- <-- added this column
+    pdf_url TEXT,
+    approved TINYINT(1) DEFAULT 0,
+    created_at DATETIME NOT NULL,
+    PRIMARY KEY (id),
+    KEY order_id (order_id)
+) {$charset};";
+dbDelta($sql);
+
 
         // flush rewrite rules just to be safe
         flush_rewrite_rules();
@@ -89,7 +91,14 @@ class OIM_DB {
         $internal = isset($data['internal_order_id']) && $data['internal_order_id'] 
             ? sanitize_text_field($data['internal_order_id']) 
             : self::generate_internal_order_id();
+        $existing = $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM {$table} WHERE internal_order_id = %s",
+            $internal
+        ));
         
+        if ($existing) {
+            return false; // Order already exists
+        }
         // ✅ Generate invoice_number with INV prefix if not provided
         if (empty($data['invoice_number'])) {
             $data['invoice_number'] = 'INV' . $internal;
@@ -123,7 +132,8 @@ class OIM_DB {
         // ✅ Email notification section
         try {
             $company_email = get_option('oim_company_email', get_option('admin_email'));
-            $driver_link = home_url('/oim-dashboard/driver-upload/' . $token . '/');
+            //$dsriver_link = home_url('/oim-dashboard/driver-upload/' . $token . '/');
+            $driver_link = home_url('/oim/track/' . $token . '/');
             $internal_order_id = $internal;
             $invoice_number = $data['invoice_number'];
             
@@ -277,6 +287,7 @@ class OIM_DB {
         }
         return $row;
     }
+    
 
     // In class-oim-db.php
 
@@ -284,7 +295,6 @@ public static function insert_invoice($invoice) {
     global $wpdb;
     $table = $wpdb->prefix . 'oim_invoices';
     
-    // ✅ Add format specifiers for proper data typing and security
     $result = $wpdb->insert(
         $table, 
         $invoice,
@@ -292,13 +302,13 @@ public static function insert_invoice($invoice) {
             '%d',  // order_id
             '%s',  // invoice_number
             '%s',  // data
+            '%s',  // attachments
             '%s',  // pdf_url
             '%d',  // approved
             '%s'   // created_at
         ]
     );
     
-    // ✅ Add error logging if insert fails
     if ($result === false) {
         error_log('Invoice insert failed!');
         error_log('Error: ' . $wpdb->last_error);
@@ -309,6 +319,7 @@ public static function insert_invoice($invoice) {
     
     return $wpdb->insert_id;
 }
+
 
     /**
      * Import Excel expecting headers that match (or normalize to) form input names.
@@ -488,23 +499,11 @@ public static function import_excel($file_path)
             $invoice_raw = $data['invoice_number'] ?? '';
             $invoice = trim($invoice_raw);
 
-            if ($invoice === '') {
-                $temp_internal_id = self::generate_internal_order_id();
-                $invoice = 'INV' . $temp_internal_id;
-                $data['invoice_number'] = $invoice;
-                $data['internal_order_id'] = $temp_internal_id;
-            }
+            
 
             $invoice_lc = strtolower($invoice);
 
-            $invoice_exists_in_db = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$invoices_table} WHERE invoice_number = %s", $invoice));
-
-            if ($invoice_exists_in_db > 0 || isset($local_invoice_numbers[$invoice_lc]) || isset($existing_invoice_numbers[$invoice_lc])) {
-                $duplicates++;
-                $duplicate_list[] = "{$reference} (Invoice: {$invoice})";
-                $local_invoice_numbers[$invoice_lc] = true;
-                continue;
-            }
+            
 
             $settings_keys = [
                 'oim_company_email', 'oim_company_bank', 'oim_company_bic',
@@ -533,6 +532,12 @@ public static function import_excel($file_path)
             if (!isset($data['internal_order_id'])) {
                 $data['internal_order_id'] = self::generate_internal_order_id();
             }
+            if ($invoice === '') {
+                $temp_internal_id = $data['internal_order_id'];
+                $invoice = 'INV' . $temp_internal_id;
+                $data['invoice_number'] = $invoice;
+
+            }
             $data['created_at'] = current_time('mysql');
 
             $order_result = self::insert_order($data);
@@ -542,9 +547,10 @@ public static function import_excel($file_path)
                 unset($invoice_data['attachments']);
 
                 $invoice_record = [
-                    'order_id' => $order_result['id'],
+                    'order_id' => $data['internal_order_id'],
                     'invoice_number' => $invoice,
                     'data' => maybe_serialize($invoice_data),
+                    'attachments'    => '',
                     'pdf_url' => '',
                     'approved' => 0,
                     'created_at' => $data['created_at']

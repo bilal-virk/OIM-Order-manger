@@ -140,12 +140,7 @@ add_action('plugins_loaded', function() {
         }
     }
     
-    // Initialize cron schedules
-    if (class_exists('OIM_Invoices')) {
-        add_filter('cron_schedules', ['OIM_Invoices', 'add_quarterhour_cron']);
-        OIM_Invoices::schedule_invoice_reminders();
-        OIM_Invoices::init_cron_hook();
-    }
+    
     
     // Initialize frontend
     if (class_exists('OIM_Frontend')) {
@@ -173,7 +168,19 @@ add_action('plugins_loaded', function() {
         new OIM_Invoices();
     }
 });
+// Initialize cron schedules
+add_action('plugins_loaded', function () {
+    if (!class_exists('OIM_Invoices')) {
+        require_once OIM_PLUGIN_DIR . 'includes/class-oim-invoices.php';
+    }
 
+    // Add custom cron schedule
+    add_filter('cron_schedules', ['OIM_Invoices', 'add_quarterhour_cron']);
+
+    // Initialize cron hooks
+    OIM_Invoices::init_cron_hook();
+    OIM_Invoices::schedule_invoice_reminders();
+}, 20);    
 // ============================================
 // REWRITE RULES
 // ============================================
@@ -264,14 +271,19 @@ add_action('parse_request', function($wp) {
         add_action('wp_enqueue_scripts', 'oim_enqueue_dashboard_assets', 1);
     }
 });
-
+wp_enqueue_style(
+            'oim-upload-style',
+            OIM_PLUGIN_URL . 'assets/upload.css',
+            [],
+            OIM_VERSION
+        );
 /**
  * Enqueue dashboard assets
  */
 function oim_enqueue_dashboard_assets() {
     $oim_page = get_query_var('oim_page');
     $dashboard_pages = ['dashboard', 'orders', 'invoices', 'settings', 'edit_order', 'edit_invoice', 'new_order', 'driver_upload']; 
-    
+    $public_pages = ['driver_upload'];
     if (in_array($oim_page, $dashboard_pages)) {
         // Main frontend styles
         wp_enqueue_style(
@@ -348,11 +360,11 @@ add_action('template_redirect', function() {
 
     // Check if this is a dashboard page
     $dashboard_pages = ['dashboard', 'orders', 'invoices', 'settings', 'edit_order', 'edit_invoice', 'new_order', 'driver_upload']; // Added new_order
-    
+    $public_pages = ['driver_upload'];
     if (!in_array($page, $dashboard_pages)) return;
 
     // Security: Check if user is logged in
-    if (!is_user_logged_in()) {
+    if (in_array($page, $dashboard_pages) && !is_user_logged_in()) {
         $redirect_url = site_url($_SERVER['REQUEST_URI']);
         wp_redirect(wp_login_url($redirect_url));
         exit;
@@ -447,6 +459,7 @@ function oim_get_dashboard_url($page = '') {
 function oim_is_dashboard_page() {
     $oim_page = get_query_var('oim_page');
     $dashboard_pages = ['dashboard', 'orders', 'invoices', 'settings', 'edit_order', 'edit_invoice', 'new_order', 'driver_upload'];
+    $public_pages = ['driver_upload'];
     return in_array($oim_page, $dashboard_pages);
 }
 
@@ -467,3 +480,10 @@ add_action('init', function () {
     );
 });
 
+add_action('admin_init', function () {
+    if (isset($_GET['oim_run_cron'])) {
+        error_log('[OIM CRON] Manual trigger');
+        do_action('oim_invoice_reminder_cron');
+        wp_die('OIM cron executed. Check debug.log');
+    }
+});

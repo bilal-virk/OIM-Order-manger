@@ -29,6 +29,7 @@ class OIM_Invoices {
         add_action('admin_post_oim_export_all_txt', [$this, 'handle_export_all_txt']);
         add_action('admin_post_oim_import_payments', [$this, 'handle_payment_import']);        
         add_action('admin_post_oim_bulk_download_txt', [$this, 'bulk_download_invoices_txt']);
+        add_action('admin_post_oim_delete_attachment', [$this, 'handle_delete_attachmen_from_invoices']);
         $this->init_email_options();
         add_action('wp_mail_failed', [$this, 'log_email_error']);
         add_action('admin_post_oim_export_invoice', [$this, 'export_invoice_txt']);
@@ -820,7 +821,14 @@ public function export_invoice_pdf() {
         [$this, 'render_send_log_page']
     );
 }
-
+private static function log($message, $data = null) {
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('[OIM CRON] ' . $message);
+        if ($data !== null) {
+            error_log(print_r($data, true));
+        }
+    }
+}
 
 public static function schedule_invoice_reminders() {
     if (!wp_next_scheduled('oim_invoice_reminder_cron')) {
@@ -832,37 +840,61 @@ public static function schedule_invoice_reminders() {
  * Hook cron to our function
  */
 public static function init_cron_hook() {
-    add_action('oim_invoice_reminder_cron', [__CLASS__, 'process_invoice_reminders']);
+    if (!wp_next_scheduled('oim_invoice_reminder_cron')) {
+        wp_schedule_event(time(), 'quarterhour', 'oim_invoice_reminder_cron');
+    }
+
+    add_action('oim_invoice_reminder_cron', [self::class, 'process_invoice_reminders']);
 }
 
 /**
  * Process invoice reminders
  */
 public static function process_invoice_reminders() {
+    $now = strtotime('2025-12-25 16:56:00');
+    self::log('Cron started at ' . current_time('mysql'));
     global $wpdb;
     $invoices_table = $wpdb->prefix . 'oim_invoices';
-    
+    $test_mode = true;
     // Get all exported invoices
     $invoices = $wpdb->get_results("SELECT * FROM {$invoices_table}", ARRAY_A);
-
+    self::log('Total invoices found: ' . count($invoices));
     foreach ($invoices as $invoice) {
         $data = maybe_unserialize($invoice['data']);
+        $raw_due = $data['invoice_due_date'] ?? '';
+        $clean_due = preg_replace('/[^0-9\- :]/', '', $raw_due); // remove any junk
+        $due_date = strtotime($clean_due);
         if (!is_array($data)) {
             $data = json_decode($invoice['data'], true) ?: [];
         }
+        if (empty($data)) {
+            self::log('❌ Invoice data could not be parsed');
+            continue;
+        }
 
         // Skip if no due date
-        if (empty($data['invoice_due_date'])) continue;
-
+        self::log('Raw invoice_due_date: ' . ($data['invoice_due_date'] ?? 'EMPTY') . $invoice['order_id']);
+        if (empty($data['invoice_due_date'])) {
+            self::log('⏭ Skipped: No due date found ' . $invoice['order_id']);
+            continue;
+        }
+        $now = strtotime('2025-12-25 16:56:00');
         $due_date = strtotime($data['invoice_due_date']);
+        $now = strtotime(current_time('Y-m-d H:i:s'));
         $today = strtotime(current_time('Y-m-d'));
-
-        $days_past_due = ($today - $due_date) / 86400;
-
+        if (!$due_date) {
+            self::log('❌ Invalid due date format: ' . $data['invoice_due_date']);
+            continue;
+        }
+        $days_past_due = floor(($now - $due_date) / 86400);
+        self::log("Invoice {$data['invoice_number']} (Order {$data['internal_order_id']}) is {$days_past_due} days past due");
         $reminder_type = false;
         $subject = '';
         $message = '';
-
+        if ($days_past_due < 0) {
+            self::log('Skipped: Invoice not yet due');
+            continue;
+        }
         // Determine reminder type and email content
         if ($days_past_due === 0) {
             $reminder_type = 'Reminder 0';
@@ -918,6 +950,7 @@ public static function process_invoice_reminders() {
 
         // Send email if reminder type is matched
         if ($reminder_type && !empty($subject) && !empty($message)) {
+            self::log($reminder_type . current_time('mysql'));
             $to = $data['customer_email'] ?? get_option('oim_company_email', '');
             if ($to) wp_mail($to, $subject, $message);
 
@@ -933,7 +966,9 @@ public static function process_invoice_reminders() {
                 ['%d']
             );
         }
+        self::log("Invoice {$invoice['id']} updated after reminder");
     }
+    self::log('Cron finished');
 }
 
 
@@ -1388,6 +1423,13 @@ public static function add_quarterhour_cron($schedules) {
             <?php if (!empty($invoices)): ?>
                 <?php foreach ($invoices as $invoice):
                     $data = $parse_invoice_data($invoice['data']);
+                    
+                    $docs = OIM_DB::get_documents($data['internal_order_id']);
+// safely parse attachments if exists
+$attachments = !empty($invoice['attachments']) 
+    ? $parse_invoice_data($invoice['attachments']) 
+    : [];
+
                     $current_user_obj = wp_get_current_user();
                     $current_user = $current_user_obj->display_name ?: 'AUTOMAT';
                     $loading_city        = $data['loading_city'] ?? '—';
@@ -1416,7 +1458,7 @@ public static function add_quarterhour_cron($schedules) {
                     with truck {$truck_number} date {$loading_date} - {$unloading_date} your order Nr. {$customer_order_nr}.
                     → Fakturujeme Vám prepravu tovaru {$loading_city} /{$loading_country}/ - {$unloading_city} /{$unloading_country}/
                     vozidlom {$truck_number} v dňoch {$loading_date} - {$unloading_date}, Vaša objednávka č. {$customer_order_nr}.{$reverse_charge_text}
-                    
+
                     Our reference / Naša referencia: {$internal_order_id}
                     Issued by / Vystavila: {$current_user}
                     Telephone / Telefón: 00421 915 794 911
@@ -1450,8 +1492,11 @@ public static function add_quarterhour_cron($schedules) {
                 ?>
                     <tr class="oim-order-row"
                         data-order-id="<?php echo esc_attr($invoice['id']); ?>"
+                        data-order-idd="<?php echo esc_attr($invoice['order_id']); ?>"
                         data-invoice-number="<?php echo esc_attr($invoice['invoice_number'] ?? ''); ?>"
                         data-order-data="<?php echo esc_attr(json_encode($data)); ?>"
+                        data-documents="<?php echo esc_attr(json_encode($docs)); ?>"
+                        data-attachments="<?php echo esc_attr(json_encode($attachments)); ?>"
                         data-created-at="<?php echo esc_attr($invoice['created_at']); ?>"
                         data-status="<?php echo esc_attr($invoice['status'] ?? ''); ?>">
 
@@ -1541,6 +1586,74 @@ public static function add_quarterhour_cron($schedules) {
         <div id="oim-sidebar-overlay" class="oim-sidebar-overlay"></div>
 
         <script>
+        jQuery(document).ready(function($) {
+  $(document).on('click', '.oim-file-delete', function(e) {
+    e.preventDefault();
+    
+    
+    
+    const $btn = $(this);
+    const $listItem = $btn.closest('.oim-document-item');
+    const url = $btn.data('url') || $btn.attr('href'); // Support both button and link
+    
+    $btn.html('<span class="dashicons dashicons-update dashicons-spin"></span>');
+    
+    $.get(url, function() {
+      $listItem.fadeOut(300, function() {
+        $(this).remove();
+        
+        const $list = $listItem.closest('.oim-document-list');
+        if ($list.find('.oim-document-item').length === 0) {
+          const type = $list.closest('.oim-card').find('.oim-card-title').text();
+          $list.replaceWith(`<p class="oim-empty-state">No ${type.toLowerCase()} found.</p>`);
+        }
+      });
+    }).fail(function() {
+      alert('Failed to delete file');
+      $btn.html('<span class="dashicons dashicons-trash"></span>');
+    });
+  });
+});
+
+
+            jQuery(document).ready(function($) {
+  // Handle delete for both documents and attachments
+  $(document).on('click', '.oim-file-delete', function(e) {
+    e.preventDefault();
+    
+    
+    
+    const $btn = $(this);
+    const $fileItem = $btn.closest('.oim-file-item');
+    const url = $btn.attr('href');
+    
+    $btn.html('<i class="fas fa-spinner fa-spin"></i>');
+    
+    $.get(url, function() {
+      $fileItem.fadeOut(300, function() {
+        $(this).remove();
+        
+        // Update count
+        const $section = $fileItem.closest('.oim-files-section');
+        const remaining = $section.find('.oim-file-item').length;
+        $section.find('.oim-files-subtitle').html(
+          $section.find('.oim-files-subtitle').html().replace(/\(\d+\)/, `(${remaining})`)
+        );
+        
+        // Hide section if empty
+        if (remaining === 0) {
+          const $group = $section.closest('.documents-attachments');
+          if ($group.find('.oim-file-item').length === 0) {
+            $group.fadeOut(300);
+          }
+        }
+      });
+    }).fail(function() {
+      alert('Failed to delete file');
+      $btn.html('<i class="fas fa-trash-alt"></i>');
+    });
+  });
+});
 jQuery(document).ready(function($) {
 
     $('#toggle-import-btn').on('click', function() {
@@ -1567,11 +1680,25 @@ jQuery(document).ready(function($) {
     $('.oim-order-row').each(function(index) {
         let $row = $(this);
         let rowData = $row.attr('data-order-data');
+        let docsData = $row.attr('data-documents');
+        let attachmentsData = $row.attr('data-attachments');
 
         try {
             rowData = (typeof $row.data('order-data') === 'object') ? $row.data('order-data') : JSON.parse(rowData);
         } catch (err) {
             rowData = $row.data('order-data') || {};
+        }
+
+        try {
+            docsData = JSON.parse(docsData);
+        } catch (err) {
+            docsData = [];
+        }
+
+        try {
+            attachmentsData = JSON.parse(attachmentsData);
+        } catch (err) {
+            attachmentsData = [];
         }
 
         allOrders.push({
@@ -1580,7 +1707,9 @@ jQuery(document).ready(function($) {
             invoiceNumber: $row.data('invoice-number'),
             status: $row.data('status'),
             data: rowData,
-            createdAt: $row.data('created-at')
+            createdAt: $row.data('created-at'),
+            documents: docsData || [],
+            attachments: attachmentsData || []
         });
     });
 
@@ -1687,6 +1816,7 @@ jQuery(document).ready(function($) {
         const data = order.data || {};
         const createdAt = order.createdAt || '-';
         const invoiceNumber = order.invoiceNumber || '-';
+        const internalId = order.order_id
         const status = order.status || '-';
         const currentUser = (window.currentUser && window.currentUser.displayName) || 'AUTOMAT';
 
@@ -1888,7 +2018,127 @@ $('#oim-action-delete').off('click').on('click', function(e) {
             </div>
           </div>
         `;
+const docs = order.documents || [];
+console.log('Documents for order', order.id, docs);
 
+        // Documents & Attachments Section
+let hasAttachments = order.attachments && order.attachments.length > 0;
+const hasDocs = Array.isArray(docs) && docs.length > 0;
+if (hasDocs || hasAttachments) {
+  html += `
+    <div class="oim-detail-group documents-attachments">
+      <h4>Documents & Attachments</h4>
+      <div class="oim-files-list">
+  `;
+  
+  // Documents Section
+  if (hasDocs) {
+    html += `
+      <div class="oim-files-section oim-docs-section">
+        <h5 class="oim-files-subtitle">
+          <i class="fas fa-file-alt"></i> Driver Documents (${order.documents.length})
+        </h5>
+    `;
+    
+    order.documents.forEach(function (doc) {
+      const ext = doc.filename.split('.').pop().toLowerCase();
+      let icon = 'fa-file';
+      
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+        icon = 'fa-file-image';
+      } else if (ext === 'pdf') {
+        icon = 'fa-file-pdf';
+      } else if (['doc', 'docx'].includes(ext)) {
+        icon = 'fa-file-word';
+      } else if (['xls', 'xlsx', 'csv'].includes(ext)) {
+        icon = 'fa-file-excel';
+      } else if (['zip', 'rar', '7z'].includes(ext)) {
+        icon = 'fa-file-archive';
+      }
+      
+      const deleteUrl = '<?php echo admin_url("admin-post.php?action=oim_delete_doc&_wpnonce=" . wp_create_nonce("oim_delete_doc")); ?>'
+    + '&doc_id=' + doc.id
+    + '&order_id=' + internalId;
+
+      html += `
+        <div class="oim-file-item oim-doc-item">
+          <i class="fas ${icon}"></i>
+          <a href="${doc.file_url}" target="_blank" class="oim-file-link">${doc.filename}</a>
+          <div class="oim-file-actions">
+            <a href="${doc.file_url}" target="_blank" class="oim-file-view" title="View">
+              <i class="fas fa-eye"></i>
+            </a>
+            <a href="${doc.file_url}" download class="oim-file-download" title="Download">
+              <i class="fas fa-download"></i>
+            </a>
+            <a href="${deleteUrl}" class="oim-file-delete" title="Delete">
+              <i class="fas fa-trash-alt"></i>
+            </a>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += `</div>`;
+  }
+
+  // Attachments Section
+  if (hasAttachments) {
+    html += `
+      <div class="oim-files-section oim-attachments-section">
+        <h5 class="oim-files-subtitle">
+          <i class="fas fa-paperclip"></i> Order Attachments (${order.attachments.length})
+        </h5>
+    `;
+    
+    order.attachments.forEach(function (url) {
+      const filename = url.split('/').pop();
+      const ext = filename.split('.').pop().toLowerCase();
+      let icon = 'fa-file';
+      
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+        icon = 'fa-file-image';
+      } else if (ext === 'pdf') {
+        icon = 'fa-file-pdf';
+      } else if (['doc', 'docx'].includes(ext)) {
+        icon = 'fa-file-word';
+      } else if (['xls', 'xlsx', 'csv'].includes(ext)) {
+        icon = 'fa-file-excel';
+      } else if (['zip', 'rar', '7z'].includes(ext)) {
+        icon = 'fa-file-archive';
+      }
+      
+      const deleteUrl = '<?php echo admin_url("admin-post.php?action=oim_delete_attachment&_wpnonce=" . wp_create_nonce("oim_delete_attachment")); ?>'
+    + '&order_id=' + order.id
+    + '&file=' + encodeURIComponent(url);
+
+      html += `
+        <div class="oim-file-item oim-attachment-item">
+          <i class="fas ${icon}"></i>
+          <a href="${url}" target="_blank" class="oim-file-link">${filename}</a>
+          <div class="oim-file-actions">
+            <a href="${url}" target="_blank" class="oim-file-view" title="View">
+              <i class="fas fa-eye"></i>
+            </a>
+            <a href="${url}" download class="oim-file-download" title="Download">
+              <i class="fas fa-download"></i>
+            </a>
+            <a href="${deleteUrl}" class="oim-file-delete" title="Delete">
+              <i class="fas fa-trash-alt"></i>
+            </a>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += `</div>`;
+  }
+
+  html += `
+      </div>
+    </div>
+  `;
+}
 // Append collapsible logs container (will be filled dynamically)
 
 html += `
@@ -2888,8 +3138,6 @@ public function render_edit_invoice_page($invoice_id = 0) {
 // ===== HANDLE "SAVE" BUTTON =====
 if (isset($_POST['save']) || isset($_POST['oim_edit_invoice_submit'])) {
     check_admin_referer('oim_edit_invoice');
-
-    // ✅ PRESERVE IMPORTANT DATES AND FLAGS - Store them before updating
     $preserved_issue_date = $invoice_data['invoice_issue_date'] ?? '';
     $preserved_sent_date = $invoice_data['invoice_sent_date'] ?? '';
     $preserved_export_date = $invoice_data['invoice_export_date'] ?? '';
@@ -2912,6 +3160,19 @@ if (isset($_POST['save']) || isset($_POST['oim_edit_invoice_submit'])) {
 
     foreach ($fields as $f) {
         $invoice_data[$f] = sanitize_text_field($_POST[$f] ?? '');
+    }
+    if (!empty($invoice_data['invoice_issue_date'])) {
+
+        $due_days = intval($invoice_data['invoice_due_days'] ?? $invoice_data['invoice_due_date_in_days'] ?? 0);
+
+        if ($due_days > 0) {
+            $invoice_data['invoice_due_date'] = date(
+                'Y-m-d H:i:s',
+                strtotime($invoice_data['invoice_issue_date'] . " +{$due_days} days")
+            );
+        } else {
+            $invoice_data['invoice_due_date'] = '';
+        }
     }
 
     // ✅ IF SUPPLIER IS EMPTY, FETCH FROM SETTINGS
@@ -3003,6 +3264,20 @@ if (isset($_POST['oim_edit_invoice_submit_send'])) {
     foreach ($fields as $f) {
         $invoice_data[$f] = sanitize_text_field($_POST[$f] ?? '');
     }
+    if (!empty($invoice_data['invoice_issue_date'])) {
+
+        $due_days = intval($invoice_data['invoice_due_days'] ?? $invoice_data['invoice_due_date_in_days'] ?? 0);
+
+        if ($due_days > 0) {
+            $invoice_data['invoice_due_date'] = date(
+                'Y-m-d H:i:s',
+                strtotime($invoice_data['invoice_issue_date'] . " +{$due_days} days")
+            );
+        } else {
+            $invoice_data['invoice_due_date'] = '';
+        }
+    }
+
 
     // ✅ IF SUPPLIER IS EMPTY, FETCH FROM SETTINGS
     if (empty($invoice_data['oim_company_supplier']) || trim($invoice_data['oim_company_supplier']) === '') {
@@ -3172,7 +3447,6 @@ if (isset($_POST['oim_edit_invoice_submit_send'])) {
     $amount_paid = floatval($invoice_data['amount_paid'] ?? 0);
     $invoice_data['oim_total_price_to_be_paid'] = round($total_price - $amount_paid, 2);
 
-    // Continue with HTML form rendering...
     ?>
 <div class="wrap oim-invoice-edit">
     <div class="oim-header">
@@ -3739,7 +4013,7 @@ jQuery(document).ready(function($) {
 
         if ($sent) {
             // Log/store invoice record (if desired)
-            $this->store_invoice_record($id, $internal_order_id, $pdf_url, $order_data);
+            // $this->store_invoice_record($id, $internal_order_id, $pdf_url, $order_data);
 
             // Log send action
             $this->log_invoice_send($id, $to);
@@ -4108,7 +4382,35 @@ public function handle_export_all_txt() {
         }
     }
 
+public static function handle_delete_attachmen_from_invoices() {
+    header('Content-Type: text/plain');
+    
+    if (!current_user_can('manage_options')) {
+        echo 'unauthorized';
+        die();
+    }
 
+    $order_id = isset($_GET['order_id']) ? intval($_GET['order_id']) : 0;
+    $file_url = isset($_GET['file']) ? esc_url_raw($_GET['file']) : '';
+
+    if (!$order_id || !$file_url) {
+        echo 'missing';
+        die();
+    }
+
+    check_admin_referer('oim_delete_attachment');  // Remove order_id suffix
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'oim_invoices';
+    $attachments_json = $wpdb->get_var($wpdb->prepare("SELECT attachments FROM $table WHERE id = %d", $order_id));
+    $attachments = json_decode($attachments_json, true) ?: [];
+
+    $attachments = array_filter($attachments, function($url) use ($file_url) {
+        return urldecode($url) !== urldecode($file_url);
+    });
+    $wpdb->update($table, ['attachments' => json_encode(array_values($attachments))], ['id' => $order_id]);
+    die();
+}
 
 public function process_invoice($action = 'save') {
     if (!current_user_can('manage_options')) wp_die('Unauthorized');
@@ -4231,49 +4533,7 @@ public function process_invoice($action = 'save') {
     exit;
 }
 
-// ✅ HELPER: No longer needed, but keeping for reference
-// This was storing a duplicate record - you're already updating the invoice directly now
-private function store_invoice_record($order_id, $internal_order_id, $pdf_url, $data) {
-    // This function is now redundant since we update the invoice directly
-    // But keeping it in case you have other uses
-    global $wpdb;
-    $table = $wpdb->prefix . 'oim_invoices';
-    
-    // Check if invoice already exists for this order
-    $existing = $wpdb->get_var($wpdb->prepare(
-        "SELECT id FROM {$table} WHERE order_id = %d",
-        $order_id
-    ));
-    
-    if ($existing) {
-        // Update existing
-        $wpdb->update(
-            $table,
-            [
-                'invoice_number' => $data['invoice_number'] ?? 'INV-' . $internal_order_id,
-                'pdf_url' => $pdf_url,
-                'data' => maybe_serialize($data)
-            ],
-            ['id' => $existing],
-            ['%s', '%s', '%s'],
-            ['%d']
-        );
-    } else {
-        // Insert new
-        $wpdb->insert(
-            $table,
-            [
-                'order_id' => $order_id,
-                'invoice_number' => $data['invoice_number'] ?? 'INV-' . $internal_order_id,
-                'pdf_url' => $pdf_url,
-                'data' => maybe_serialize($data),
-                'approved' => 0,
-                'created_at' => current_time('mysql')
-            ],
-            ['%d', '%s', '%s', '%s', '%d', '%s']
-        );
-    }
-}
+
 
 function oim_get_order_logs() {
     check_ajax_referer('oim_get_order_logs');
